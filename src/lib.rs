@@ -26,14 +26,14 @@
 //! An archive never deletes (ADR-0040): this one inserts and selects, nothing
 //! else. The receipt is `postgresql://<server>/<database>/<table>?id=<n>`,
 //! and restoring reads the table and the id from it on the store's own
-//! connection.
+//! connection. The metadata text and the timestamp come from the archive
+//! capability (ADR-0044); the row's dialect is this crate's.
 
 pub mod row;
-pub mod timestamp;
 
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
-use archive::{ArchiveError, ArchiveItem, ArchiveReceipt, ArchiveStore};
+use archive::{ArchiveError, ArchiveItem, ArchiveReceipt, ArchiveStore, timestamp};
 use postgresql::Client;
 
 /// The table written to unless told otherwise.
@@ -110,8 +110,7 @@ impl PostgresqlArchive {
 
 impl ArchiveStore for PostgresqlArchive {
     fn archive(&self, item: ArchiveItem) -> Result<ArchiveReceipt, ArchiveError> {
-        let archived_at = timestamp::rfc3339_utc(SystemTime::now());
-        let sql = row::insert_sql(&self.table, &item, &archived_at);
+        let sql = row::insert_sql(&self.table, &item, &timestamp::now());
         let mut client = self.connect()?;
         let result = client.query(&sql).map_err(error)?;
         client.close().map_err(error)?;
@@ -203,7 +202,7 @@ mod tests {
             Some(held.data_type.clone()),
             Some(held.identifier.clone()),
             Some(bytea::hex_literal(&held.bytes)),
-            Some(row::encode_metadata(&held.metadata)),
+            Some(archive::metadata::encode(&held.metadata)),
         ];
         let handle = std::thread::spawn(move || {
             let mut events = Vec::new();
