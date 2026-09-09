@@ -8,13 +8,8 @@
 //! reads as the bytes and a `text` column keeps verbatim; either comes back
 //! as the bytes.
 
-use archive::{ArchiveError, ArchiveItem};
+use archive::{ArchiveError, ArchiveItem, metadata};
 use postgresql::{bytea, quote_identifier, quote_literal};
-
-/// Record and unit separators encode the metadata pairs into the one text
-/// column: pairs split on record, key from value on unit.
-const PAIR: char = '\u{1e}';
-const KV: char = '\u{1f}';
 
 /// The statement that stores `item` in `table` at `archived_at`, answering
 /// with the new row's `id`.
@@ -27,7 +22,7 @@ pub fn insert_sql(table: &str, item: &ArchiveItem, archived_at: &str) -> String 
         quote_literal(&item.data_type),
         quote_literal(&item.identifier),
         quote_literal(&bytea::hex_literal(&item.bytes)),
-        quote_literal(&encode_metadata(&item.metadata)),
+        quote_literal(&metadata::encode(&item.metadata)),
         quote_literal(archived_at)
     )
 }
@@ -59,7 +54,7 @@ pub fn item_from_row(row: &[Option<String>], location: &str) -> Result<ArchiveIt
         data_type: column(0, "data_type")?,
         identifier: column(1, "identifier")?,
         bytes: bytea::column_bytes(column(2, "bytes")?),
-        metadata: decode_metadata(&column(3, "metadata")?),
+        metadata: metadata::decode(&column(3, "metadata")?),
     })
 }
 
@@ -71,29 +66,6 @@ fn table_name(table: &str) -> String {
         .map(quote_identifier)
         .collect::<Vec<_>>()
         .join(".")
-}
-
-/// The metadata pairs as the one text value the column holds.
-#[must_use]
-pub fn encode_metadata(pairs: &[(String, String)]) -> String {
-    pairs
-        .iter()
-        .map(|(key, value)| format!("{key}{KV}{value}"))
-        .collect::<Vec<_>>()
-        .join(&PAIR.to_string())
-}
-
-/// The pairs a metadata column holds.
-#[must_use]
-pub fn decode_metadata(encoded: &str) -> Vec<(String, String)> {
-    if encoded.is_empty() {
-        return Vec::new();
-    }
-    encoded
-        .split(PAIR)
-        .filter_map(|pair| pair.split_once(KV))
-        .map(|(key, value)| (key.to_string(), value.to_string()))
-        .collect()
 }
 
 #[cfg(test)]
@@ -131,7 +103,7 @@ mod tests {
             Some("json".to_string()),
             Some("it's #1".to_string()),
             Some("\\x7bff".to_string()),
-            Some(encode_metadata(&original.metadata)),
+            Some(metadata::encode(&original.metadata)),
         ];
         assert_eq!(item_from_row(&hex, "here").expect("row"), original);
         let text = vec![
@@ -148,15 +120,5 @@ mod tests {
         assert!(failure.message.contains("identifier"));
         let null = [None, Some("x".to_string())];
         assert!(item_from_row(&null, "here").is_err());
-    }
-
-    #[test]
-    fn metadata_pairs_survive_the_one_column() {
-        let pairs = vec![
-            ("a".to_string(), "1".to_string()),
-            ("b".to_string(), "two words".to_string()),
-        ];
-        assert_eq!(decode_metadata(&encode_metadata(&pairs)), pairs);
-        assert_eq!(encode_metadata(&[]), "");
     }
 }
