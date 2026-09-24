@@ -1,16 +1,18 @@
 #![forbid(unsafe_code)]
 
-//! `PostgreSQL` archive: an [`ArchiveStore`] that keeps each retained item as
-//! one row of an archive table, and restores it by selecting the row back.
+//! `PostgreSQL` archive: the [`Dialect`] the archive capability's
+//! `SqlArchive` keeps each retained item in an archive table with, as
+//! `SqlArchive::<PostgreSql>`.
 //!
-//! A xmip-core-archive **technology** (repository-model.md): it depends on
-//! the archive capability for the [`ArchiveStore`] trait and its item,
-//! receipt and error types, and on the `PostgreSQL` transport technology for
-//! the connection — the simple query flow, trust or a cleartext password.
-//! One item is one row with the four columns every archive technology
-//! carries — `data_type`, `identifier`, `bytes`, `metadata` — and
-//! `archived_at`, when it was handed over. The table is the operator's to
-//! create; this is the shape it is written for:
+//! The store, the row, the SELECT and the receipt are the capability's
+//! (`archive::sql`, ADR-0044); only the dialect is this crate's —
+//! double-quoted identifiers, ISO string literals, the bytes in the bytea
+//! hex form the transport speaks, which a `bytea` column reads as the
+//! bytes and a `text` column keeps verbatim (either comes back as the
+//! bytes), and the new row's id asked for with `RETURNING`. The
+//! connection is the `PostgreSQL` transport technology's — the simple
+//! query flow, trust or a cleartext password. The table is the operator's
+//! to create; this is the shape it is written for:
 //!
 //! ```sql
 //! CREATE TABLE archive (
@@ -23,124 +25,53 @@
 //! );
 //! ```
 //!
-//! An archive never deletes (ADR-0040): this one inserts and selects, nothing
-//! else. The receipt is `postgresql://<server>/<database>/<table>?id=<n>`,
-//! and restoring reads the table and the id from it on the store's own
-//! connection. The metadata text, the timestamp, the shared row code and
-//! the receipt parser come from the archive capability (ADR-0044); the
-//! row's dialect is this crate's.
+//! The receipt is `postgresql://<server>/<database>/<table>?id=<n>`.
 
-pub mod row;
+use archive::ArchiveError;
+use archive::sql::{Dialect, Row, Server};
+use postgresql::{Client, bytea};
 
-use std::time::Duration;
+/// What `PostgreSQL` does its own way.
+pub struct PostgreSql;
 
-use archive::{ArchiveError, ArchiveItem, ArchiveReceipt, ArchiveStore, location, timestamp};
-use postgresql::Client;
+impl Dialect for PostgreSql {
+    const SCHEME: &'static str = "postgresql";
+    const ID_AFTER_VALUES: &'static str = " RETURNING id";
+    type Connection = Client;
 
-/// The table written to unless told otherwise.
-pub const DEFAULT_TABLE: &str = "archive";
-
-/// An archive that keeps items as rows of one table on one server.
-pub struct PostgresqlArchive {
-    server: String,
-    database: String,
-    user: String,
-    password: Option<String>,
-    table: String,
-    timeout: Option<Duration>,
-}
-
-impl PostgresqlArchive {
-    /// An archive writing to [`DEFAULT_TABLE`] in `database` at `server`,
-    /// logging in as `user` by trust.
-    #[must_use]
-    pub fn new(
-        server: impl Into<String>,
-        database: impl Into<String>,
-        user: impl Into<String>,
-    ) -> Self {
-        Self {
-            server: server.into(),
-            database: database.into(),
-            user: user.into(),
-            password: None,
-            table: DEFAULT_TABLE.to_string(),
-            timeout: None,
-        }
+    fn quote_identifier(name: &str) -> String {
+        postgresql::quote_identifier(name)
     }
 
-    /// The password to give when the server asks for one in the clear.
-    #[must_use]
-    pub fn with_password(mut self, password: impl Into<String>) -> Self {
-        self.password = Some(password.into());
-        self
+    fn quote_literal(text: &str) -> String {
+        postgresql::quote_literal(text)
     }
 
-    /// The table to write to, `audit.archive` say.
-    #[must_use]
-    pub fn with_table(mut self, table: impl Into<String>) -> Self {
-        self.table = table.into();
-        self
+    fn bytes_literal(bytes: &[u8]) -> String {
+        postgresql::quote_literal(&bytea::hex_literal(bytes))
     }
 
-    /// Give up on a server that stops mid-message.
-    #[must_use]
-    pub const fn timing_out_after(mut self, timeout: Duration) -> Self {
-        self.timeout = Some(timeout);
-        self
+    fn column_bytes(text: String) -> Vec<u8> {
+        bytea::column_bytes(text)
     }
 
-    fn connect(&self) -> Result<Client, ArchiveError> {
+    fn connect(server: &Server) -> Result<Client, ArchiveError> {
         Client::connect(
-            &self.server,
-            &self.user,
-            &self.database,
-            self.password.as_deref(),
-            self.timeout,
+            &server.address,
+            &server.user,
+            &server.database,
+            server.password.as_deref(),
+            server.timeout,
         )
         .map_err(ArchiveError::caused_by)
     }
 
-    fn location(&self, id: &str) -> String {
-        format!(
-            "postgresql://{}/{}/{}?id={id}",
-            self.server, self.database, self.table
-        )
-    }
-}
-
-impl ArchiveStore for PostgresqlArchive {
-    fn archive(&self, item: ArchiveItem) -> Result<ArchiveReceipt, ArchiveError> {
-        let sql = row::insert_sql(&self.table, &item, &timestamp::now());
-        let mut client = self.connect()?;
-        let result = client.query(&sql).map_err(ArchiveError::caused_by)?;
-        client.close().map_err(ArchiveError::caused_by)?;
-        let id = result
-            .rows
-            .first()
-            .and_then(|first| first.first())
-            .cloned()
-            .flatten()
-            .ok_or_else(|| ArchiveError {
-                message: format!("the insert into {} returned no id", self.table),
-            })?;
-        Ok(ArchiveReceipt {
-            location: self.location(&id),
-            checksum: None,
-        })
+    fn select(client: &mut Client, sql: &str) -> Result<Vec<Row>, ArchiveError> {
+        Ok(client.query(sql).map_err(ArchiveError::caused_by)?.rows)
     }
 
-    fn restore(&self, receipt: &ArchiveReceipt) -> Result<ArchiveItem, ArchiveError> {
-        let (table, id) = location::table_row("postgresql", &receipt.location)?;
-        let mut client = self.connect()?;
-        let result = client
-            .query(&row::DIALECT.select_sql(table, id))
-            .map_err(ArchiveError::caused_by)?;
-        client.close().map_err(ArchiveError::caused_by)?;
-        let first = result.rows.first().ok_or_else(|| ArchiveError {
-            message: format!("no row at {}", receipt.location),
-        })?;
-        row::DIALECT.item_from_row(first, &receipt.location)
+    fn close(client: Client) -> Result<(), ArchiveError> {
+        client.close().map_err(ArchiveError::caused_by)
     }
 }
 
@@ -148,7 +79,8 @@ impl ArchiveStore for PostgresqlArchive {
 mod tests {
     use super::*;
     use archive::fixture::{item, secs};
-    use postgresql::bytea;
+    use archive::sql::{SqlArchive, insert_sql, item_from_row, select_sql};
+    use archive::{ArchiveItem, ArchiveReceipt, ArchiveStore, metadata};
     use postgresql::{Answer, Event, Session};
     use std::net::TcpListener;
     use std::thread::JoinHandle;
@@ -167,7 +99,7 @@ mod tests {
             Some(held.data_type.clone()),
             Some(held.identifier.clone()),
             Some(bytea::hex_literal(&held.bytes)),
-            Some(archive::metadata::encode(&held.metadata)),
+            Some(metadata::encode(&held.metadata)),
         ];
         let handle = std::thread::spawn(move || {
             let mut events = Vec::new();
@@ -199,11 +131,57 @@ mod tests {
         (address, handle)
     }
 
+    fn quoted() -> ArchiveItem {
+        ArchiveItem {
+            data_type: "json".to_string(),
+            identifier: "it's #1".to_string(),
+            bytes: vec![0x7b, 0xff],
+            metadata: vec![("source".to_string(), "playground".to_string())],
+        }
+    }
+
+    #[test]
+    fn the_insert_names_the_five_columns_and_asks_for_the_id() {
+        let sql = insert_sql::<PostgreSql>("audit.archive", &quoted(), "2026-09-09T12:00:00Z");
+        assert!(sql.starts_with(
+            "INSERT INTO \"audit\".\"archive\" \
+             (data_type, identifier, bytes, metadata, archived_at) VALUES ('json', 'it''s #1', \
+             '\\x7bff', "
+        ));
+        assert!(sql.ends_with("'2026-09-09T12:00:00Z') RETURNING id"));
+        assert_eq!(
+            select_sql::<PostgreSql>("Archive", 41),
+            "SELECT data_type, identifier, bytes, metadata FROM \"Archive\" WHERE id = 41"
+        );
+    }
+
+    #[test]
+    fn a_row_in_either_bytes_form_is_the_item_again() {
+        let original = quoted();
+        let hex = vec![
+            Some("json".to_string()),
+            Some("it's #1".to_string()),
+            Some("\\x7bff".to_string()),
+            Some(metadata::encode(&original.metadata)),
+        ];
+        let restored = item_from_row::<PostgreSql>(&hex, "here").expect("row");
+        assert_eq!(restored, original);
+        let text = vec![
+            Some("json".to_string()),
+            Some("it's #1".to_string()),
+            Some("plain".to_string()),
+            Some(String::new()),
+        ];
+        let restored = item_from_row::<PostgreSql>(&text, "here").expect("row");
+        assert_eq!(restored.bytes, b"plain");
+        assert!(restored.metadata.is_empty());
+    }
+
     #[test]
     fn an_archived_item_is_one_insert_and_its_receipt_names_the_row() {
         let original = item("json#1");
         let (address, far_end) = far_end(Some("secret"), &original, 1);
-        let store = PostgresqlArchive::new(address.clone(), "orders", "xmip")
+        let store = SqlArchive::<PostgreSql>::new(address.clone(), "orders", "xmip")
             .with_password("secret")
             .with_table("audit.archive")
             .timing_out_after(secs(2));
@@ -228,7 +206,8 @@ mod tests {
     fn the_row_restores_the_item_over_a_second_connection() {
         let original = item("json#2");
         let (address, far_end) = far_end(None, &original, 2);
-        let store = PostgresqlArchive::new(address, "orders", "xmip").timing_out_after(secs(2));
+        let store =
+            SqlArchive::<PostgreSql>::new(address, "orders", "xmip").timing_out_after(secs(2));
         let receipt = store.archive(original.clone()).expect("archive");
         let restored = store.restore(&receipt).expect("restore");
         assert_eq!(restored, original, "the row read back is the item");
@@ -246,7 +225,7 @@ mod tests {
     #[test]
     fn a_wrong_password_and_a_wrong_receipt_are_refused() {
         let (address, far_end) = far_end(Some("secret"), &item("json#3"), 1);
-        let store = PostgresqlArchive::new(address, "orders", "xmip")
+        let store = SqlArchive::<PostgreSql>::new(address, "orders", "xmip")
             .with_password("wrong")
             .timing_out_after(secs(2));
         let refused = store.archive(item("json#3")).expect_err("wrong password");
