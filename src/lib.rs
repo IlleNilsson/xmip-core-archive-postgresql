@@ -40,7 +40,7 @@ impl Dialect for PostgreSql {
     type Connection = Client;
 
     fn quote_identifier(name: &str) -> String {
-        postgresql::quote_identifier(name)
+        postgresql::session::DIALECT.quote_identifier(name)
     }
 
     fn quote_literal(text: &str) -> String {
