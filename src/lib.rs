@@ -51,8 +51,8 @@ impl Dialect for PostgreSql {
         postgresql::quote_literal(&bytea::hex_literal(bytes))
     }
 
-    fn column_bytes(text: String) -> Vec<u8> {
-        bytea::column_bytes(text)
+    fn column_bytes(text: &str) -> Option<Vec<u8>> {
+        bytea::from_hex_literal(text)
     }
 
     fn connect(server: &Server) -> Result<Client, ArchiveError> {
@@ -156,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn a_row_in_either_bytes_form_is_the_item_again() {
+    fn a_row_in_the_bytes_form_is_the_item_again_and_text_is_refused() {
         let original = quoted();
         let hex = vec![
             Some("json".to_string()),
@@ -172,9 +172,12 @@ mod tests {
             Some("plain".to_string()),
             Some(String::new()),
         ];
-        let restored = item_from_row::<PostgreSql>(&text, "here").expect("row");
-        assert_eq!(restored.bytes, b"plain");
-        assert!(restored.metadata.is_empty());
+        let refused = item_from_row::<PostgreSql>(&text, "here").expect_err("not bytes");
+        assert!(
+            refused.message.contains("binary form"),
+            "{}",
+            refused.message
+        );
     }
 
     #[test]
