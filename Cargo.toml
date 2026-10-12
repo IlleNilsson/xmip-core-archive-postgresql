@@ -20,6 +20,9 @@ archive = { package = "xmip-core-archive", git = "https://github.com/IlleNilsson
 # The connection: the sibling transport technology's Client speaks the
 # simple query flow, and its Session is the far end a test binds.
 postgresql = { package = "xmip-core-transport-postgresql", git = "https://github.com/IlleNilsson/xmip-core-transport-postgresql", branch = "main" }
+# SQL: the dialect this database speaks, which the capability's SqlArchive
+# writes its row and reads its bytes back in.
+sql = { package = "xmip-core-library-sql", git = "https://github.com/IlleNilsson/xmip-core-library-sql", branch = "main" }
 
 [dev-dependencies]
 # The tests archive the capability's fixture item (ADR-0044); the feature

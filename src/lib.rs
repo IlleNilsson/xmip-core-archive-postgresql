@@ -28,32 +28,17 @@
 //! The receipt is `postgresql://<server>/<database>/<table>?id=<n>`.
 
 use archive::ArchiveError;
-use archive::sql::{Dialect, Row, Server};
-use postgresql::{Client, bytea};
+use archive::sql::{Database, Row, Server};
+use postgresql::Client;
+use sql::{Dialect, POSTGRESQL};
 
 /// What `PostgreSQL` does its own way.
 pub struct PostgreSql;
 
-impl Dialect for PostgreSql {
+impl Database for PostgreSql {
     const SCHEME: &'static str = "postgresql";
-    const ID_AFTER_VALUES: &'static str = " RETURNING id";
+    const DIALECT: Dialect = POSTGRESQL;
     type Connection = Client;
-
-    fn quote_identifier(name: &str) -> String {
-        postgresql::session::DIALECT.quote_identifier(name)
-    }
-
-    fn quote_literal(text: &str) -> String {
-        postgresql::quote_literal(text)
-    }
-
-    fn bytes_literal(bytes: &[u8]) -> String {
-        postgresql::quote_literal(&bytea::hex_literal(bytes))
-    }
-
-    fn column_bytes(text: &str) -> Option<Vec<u8>> {
-        bytea::from_hex_literal(text)
-    }
 
     fn connect(server: &Server) -> Result<Client, ArchiveError> {
         Client::connect(
@@ -98,7 +83,12 @@ mod tests {
         let row = [
             Some(held.data_type.clone()),
             Some(held.identifier.clone()),
-            Some(bytea::hex_literal(&held.bytes)),
+            Some(
+                POSTGRESQL
+                    .quote_bytes(&held.bytes)
+                    .trim_matches('\'')
+                    .to_string(),
+            ),
             Some(metadata::encode(&held.metadata)),
         ];
         let handle = std::thread::spawn(move || {
