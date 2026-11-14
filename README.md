@@ -5,7 +5,9 @@ PostgreSQL archive target: one item is one row of an archive table. A technology
 The store is the capability's `archive::sql::SqlArchive`; this crate is its
 `archive::sql::Database`, `PostgreSql` — the SQL the server speaks (`PostgreSQL`'s, `sql::POSTGRESQL`,
 from `xmip-core-library-sql`) and the connection through
-[xmip-core-transport-postgresql](https://github.com/IlleNilsson/xmip-core-transport-postgresql).
+[xmip-core-library-postgresql](https://github.com/IlleNilsson/xmip-core-library-postgresql),
+the protocol the PostgreSQL transport speaks too; until 2026-11-13 it was
+reached through that transport.
 An archive here is `SqlArchive::<PostgreSql>::new(server, database, user)`.
 
 ## Toolchain

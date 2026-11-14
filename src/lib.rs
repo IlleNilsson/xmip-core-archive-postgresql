@@ -10,8 +10,8 @@
 //! hex form the transport speaks, which a `bytea` column reads as the
 //! bytes and a `text` column keeps verbatim (either comes back as the
 //! bytes), and the new row's id asked for with `RETURNING`. The
-//! connection is the `PostgreSQL` transport technology's — the simple
-//! query flow, trust or a cleartext password. The table is the operator's
+//! connection is `xmip-core-library-postgresql`'s — the simple query
+//! flow, trust or a cleartext password. The table is the operator's
 //! to create; this is the shape it is written for:
 //!
 //! ```sql
@@ -94,7 +94,9 @@ mod tests {
         let handle = std::thread::spawn(move || {
             let mut events = Vec::new();
             for _ in 0..connections {
-                let Ok(session) = Session::accept(&listener, password, Some(secs(2))) else {
+                let (stream, _) = listener.accept().expect("accept");
+                stream.set_read_timeout(Some(secs(2))).expect("timeout");
+                let Ok(session) = Session::accept(stream, password) else {
                     continue;
                 };
                 let canned = [
