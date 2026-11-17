@@ -227,7 +227,7 @@ mod tests {
         assert!(refused.message.contains("28P01"), "{refused}");
         far_end.join().expect("thread");
         for location in [
-            "s3://bucket/key",
+            "aws-s3://bucket/key",
             "postgresql://host/orders/archive",
             "postgresql://host/orders/archive?id=x",
             "postgresql://host/orders?id=1",
