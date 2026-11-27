@@ -10,11 +10,6 @@ the protocol the PostgreSQL transport speaks too; until 2026-11-13 it was
 reached through that transport.
 An archive here is `SqlArchive::<PostgreSql>::new(server, database, user)`.
 
-## Toolchain
-
-`rust-toolchain.toml` pins the toolchain for the whole estate. Do not change it
-here.
-
 ## Verification
 
 The included workflow is manual-only and calls the versioned shared workflow at
