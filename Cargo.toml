@@ -13,18 +13,18 @@ path = "src/lib.rs"
 [dependencies]
 # A Technology depends on its parent Capability, never the reverse
 # (repository-model.md). The ArchiveStore trait and its types live there.
-archive = { package = "xmip-core-archive", git = "https://github.com/IlleNilsson/xmip-core-archive", branch = "main" }
+archive = { workspace = true }
 # The connection: the protocol library's Client speaks the simple query
 # flow, and its Session is the far end a test binds.
-postgresql = { package = "xmip-core-library-postgresql", git = "https://github.com/IlleNilsson/xmip-core-library-postgresql", branch = "main" }
+postgresql = { workspace = true }
 # SQL: the dialect this database speaks, which the capability's SqlArchive
 # writes its row and reads its bytes back in.
-sql = { package = "xmip-core-library-sql", git = "https://github.com/IlleNilsson/xmip-core-library-sql", branch = "main" }
+sql = { workspace = true }
 
 [dev-dependencies]
 # The tests archive the capability's fixture item (ADR-0044); the feature
 # is enabled here so it is never part of a production build.
-archive = { package = "xmip-core-archive", git = "https://github.com/IlleNilsson/xmip-core-archive", branch = "main", features = ["test-support"] }
+archive = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true
